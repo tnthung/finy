@@ -24,6 +24,7 @@ const logger = new (class Logger {
 
 
 type BindingContext = Record<string, any>;
+type SlotContent = Map<string, Node[]>;
 
 function evalWithContext<T>(code: string, context: BindingContext): T {
   const func = new Function(...Object.keys(context), `"use strict"; return (${code});`);
@@ -310,6 +311,96 @@ abstract class Component {
     element.remove();
   }
 
+  static renderRoot(element: Element, parentArgs: BindingContext = {}): boolean {
+    this.renderNode(element, parentArgs);
+    return !element.parentNode;
+  }
+
+  private static addSlotContent(slots: SlotContent, name: string, nodes: Node[]) {
+    const content = slots.get(name);
+    content ? content.push(...nodes) : slots.set(name, nodes);
+  }
+
+  private static collectSlotContent(element: Element): SlotContent {
+    const slots: SlotContent = new Map();
+    let hasPut = false;
+    let hasDefaultContent = false;
+
+    for (const child of element.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE && (child.nodeValue ?? '').trim() === '')
+        continue;
+
+      if (child instanceof Element && child.tagName.toLowerCase() === 'put') {
+        hasPut = true;
+        const name = child.attributes.getNamedItem('f-slot')?.value.trim() ?? '';
+        this.addSlotContent(slots, name, Array.from(child.childNodes, node => node.cloneNode(true)));
+        continue;
+      }
+
+      if (child.nodeType === Node.TEXT_NODE || child instanceof Element) {
+        hasDefaultContent = true;
+        this.addSlotContent(slots, '', [child.cloneNode(true)]);
+      }
+    }
+
+    if (hasPut && hasDefaultContent)
+      throw new Error(`Component "${this.name}" cannot mix <put> children with direct slot content.`);
+
+    return slots;
+  }
+
+  private static fillSlots(parent: Node, slots: SlotContent, args: BindingContext, parentArgs: BindingContext) {
+    for (const node of Array.from(parent.childNodes)) {
+      if (!(node instanceof Element)) continue;
+
+      const slotAttr = node.attributes.getNamedItem('f-slot');
+      if (!slotAttr) {
+        this.fillSlots(node, slots, args, parentArgs);
+        continue;
+      }
+
+      node.removeAttribute('f-slot');
+
+      const name = slotAttr.value.trim();
+      const content = slots.get(name);
+      const slotArgs = { ...parentArgs };
+      for (const attr of Array.from(node.attributes)) {
+        if (!attr.name.startsWith('f-arg:')) continue;
+
+        const argName = attr.name.slice(6);
+        if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(argName))
+          throw new Error(`Invalid slot argument name "${argName}".`);
+
+        slotArgs[argName] = resolveAttributeValue(attr.value, args);
+        node.removeAttribute(attr.name);
+      }
+
+      if (node.tagName.toLowerCase() === 'template') {
+        const replacement = content ?? Array.from(
+          ((node as HTMLTemplateElement).content?.childNodes ?? node.childNodes),
+          child => child.cloneNode(true));
+        const context = content ? slotArgs : args;
+        slots.delete(name);
+
+        for (const child of replacement) {
+          parent.insertBefore(child, node);
+          this.renderNode(child, context);
+        }
+
+        node.remove();
+        continue;
+      }
+
+      if (content) {
+        slots.delete(name);
+        node.replaceChildren(...content);
+        for (const child of content) {
+          this.renderNode(child, slotArgs);
+        }
+      }
+    }
+  }
+
   static apply(element: Element, parentArgs: BindingContext = {}): boolean {
     try {
       const args: BindingContext = {};
@@ -325,8 +416,10 @@ abstract class Component {
         args[name] = value;
       }
 
+      const slots = this.collectSlotContent(element);
       const template = this.template.cloneNode(true) as HTMLTemplateElement;
       this.renderChildren(template.content, args);
+      this.fillSlots(template.content, slots, args, parentArgs);
       element.replaceWith(template.content);
       return true;
     }
@@ -387,8 +480,20 @@ function applyComponents() {
   do {
     applied = false;
     for (const [name, component] of components)
-      for (const ele of document.querySelectorAll(name))
-        applied ||= component.apply(ele);
+      for (const ele of document.querySelectorAll(name)) {
+        let isNestedComponent = false;
+        for (let parent = ele.parentNode; parent; parent = parent.parentNode) {
+          if (parent instanceof Element && components.has(parent.tagName.toLowerCase())) {
+            isNestedComponent = true;
+            break;
+          }
+        }
+
+        if (isNestedComponent)
+          continue;
+
+        applied ||= Component.renderRoot(ele);
+      }
   } while (applied);
 
   logger.info(`Applied components in ${Date.now() - time}ms`);
@@ -400,7 +505,9 @@ function applyComponents() {
   disableLogging() { logger.disable(); },
   range: function*(start: number, end?: number): Generator<number> {
     [start, end] = end === undefined ? [0, start] : [start, end];
-    for (let i = start; i < end; i++) yield i;
+    const step = start < end ? 1 : -1;
+    const pred = step > 0 ? (i: number) => i < end : (i: number) => i > end;
+    for (let i = start; pred(i); i += step) yield i;
   },
 };
 
