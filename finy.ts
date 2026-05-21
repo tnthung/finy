@@ -505,7 +505,9 @@ function applyComponents() {
   disableLogging() { logger.disable(); },
   range: function*(start: number, end?: number): Generator<number> {
     [start, end] = end === undefined ? [0, start] : [start, end];
-    for (let i = start; i < end; i++) yield i;
+    const step = start < end ? 1 : -1;
+    const pred = step > 0 ? (i: number) => i < end : (i: number) => i > end;
+    for (let i = start; pred(i); i += step) yield i;
   },
 };
 
