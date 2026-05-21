@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <script src="finy.js"></script>
+  <!-- <script src="https://tnthung.github.io/finy/finy.js"></script> -->
+  <title>Finy Control Flow Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 32px;
+      background: #f5f7fb;
+      color: #1f2937;
+    }
+
+    main {
+      display: grid;
+      gap: 18px;
+      max-width: 900px;
+    }
+
+    .card {
+      border: 1px solid #d9e0ea;
+      border-radius: 8px;
+      padding: 18px;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    }
+
+    .card h2 {
+      margin: 0 0 6px;
+    }
+
+    .status {
+      display: inline-block;
+      margin: 8px 0 14px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .status.active { background: #dcfce7; color: #166534; }
+    .status.pending { background: #fef3c7; color: #92400e; }
+    .status.disabled { background: #e5e7eb; color: #374151; }
+
+    .metrics,
+    .tasks {
+      display: grid;
+      gap: 8px;
+      margin: 12px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .metric,
+    .task {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      border-top: 1px solid #eef2f7;
+      padding-top: 8px;
+    }
+
+    .task strong {
+      color: #b45309;
+    }
+  </style>
+</head>
+<body>
+  <template finy id="arg-demo" name:str="Ada" age:num="31" active:bool="true" badge:str?="null">
+    <article class="card">
+      <h2>Arguments and text bindings</h2>
+      <p>$name is $age years old and will be $"age + 1" next year.</p>
+      <p f-if="active">Boolean argument: active</p>
+      <p f-else>Boolean argument: inactive</p>
+      <p f-if="badge === null">Optional badge: null default</p>
+      <p f-else>Optional badge: $badge</p>
+      <p>Expression binding: $"name.toUpperCase() + ' / ' + age"</p>
+    </article>
+  </template>
+
+  <template finy id="template-branch-demo" a:num>
+    <article class="card">
+      <h2>Template condition wrappers</h2>
+      <template f-if="a > 5">
+        <p>$a is greater than 5</p>
+        <div>a * 2 = $"a * 2"</div>
+      </template>
+      <template f-elif="a === 5">
+        <p>$a is equal to 5</p>
+        <div>a + 10 = $"a + 10"</div>
+      </template>
+      <template f-else>
+        <p>$a is less than 5</p>
+        <div>a - 2 = $"a - 2"</div>
+      </template>
+    </article>
+  </template>
+
+  <template finy id="loop-demo" count:num="4">
+    <article class="card">
+      <h2>Loops</h2>
+
+      <h3>for...of with finy.range</h3>
+      <ul class="metrics">
+        <li class="metric" f-for="n of finy.range(1, count + 1)">
+          <span>n = $n</span>
+          <strong>$"n * n"</strong>
+        </li>
+      </ul>
+
+      <h3>for...in over object keys</h3>
+      <ul class="metrics">
+        <li class="metric" f-for="key in { draft: 1, review: 2, ship: 3 }">
+          <span>$key</span>
+          <strong>$"({ draft: 1, review: 2, ship: 3 })[key]"</strong>
+        </li>
+      </ul>
+
+      <h3>Destructuring with Object.entries</h3>
+      <ul class="metrics">
+        <li class="metric" f-for="[label, value] of Object.entries({ speed: 'fast', size: 'tiny', syntax: 'f-*' })">
+          <span>$label</span>
+          <strong>$value</strong>
+        </li>
+      </ul>
+
+      <h3>Template f-for with f-if gating first</h3>
+      <template f-if="count > 2" f-for="n of finy.range(1, 3)">
+        <p>Template loop item $n</p>
+        <div>Template loop double $"n * 2"</div>
+      </template>
+    </article>
+  </template>
+
+  <template finy id="feature-row" label:str active:bool="false" count:num="0">
+    <li class="task">
+      <span>$label ($count)</span>
+      <strong f-if="active">enabled</strong>
+      <strong f-else>off</strong>
+    </li>
+  </template>
+
+  <template finy id="component-loop-demo">
+    <article class="card">
+      <h2>Component hosts in f-for</h2>
+      <ul class="tasks">
+        <feature-row f-for="row of [
+          { label: 'template f-if', active: true, count: 3 },
+          { label: 'template f-for', active: true, count: 2 },
+          { label: 'dynamic component', active: true, count: 1 }
+        ]" label="row.label" active="row.active" count="row.count"></feature-row>
+      </ul>
+    </article>
+  </template>
+
+  <template finy id="dynamic-foo" label:str="Foo">
+    <section>
+      <p><strong>$label</strong>: This is Foo</p>
+      <template f-slot>
+        <p>Foo fallback slot.</p>
+      </template>
+    </section>
+  </template>
+
+  <template finy id="dynamic-bar" label:str="Bar">
+    <section>
+      <p><strong>$label</strong>: This is Bar</p>
+      <template f-slot>
+        <p>Bar fallback slot.</p>
+      </template>
+    </section>
+  </template>
+
+  <template finy id="dynamic-component-demo">
+    <article class="card">
+      <h2>Dynamic components</h2>
+      <template f-for="name of ['dynamic-foo', 'dynamic-bar']" f-component="name" label="'Selected ' + name">
+        <p>Slot content from the dynamic wrapper for $name.</p>
+      </template>
+    </article>
+  </template>
+
+  <template finy id="slot-panel" owner:str="Unknown" limit:num="2">
+    <article class="card">
+      <h2 f-slot="title">Fallback title for $owner</h2>
+      <p>Panel owner: <strong>$owner</strong></p>
+      <template f-slot="body" f-arg:owner="owner" f-arg:limit="limit">
+        <p>Fallback template slot body for $owner.</p>
+      </template>
+    </article>
+  </template>
+
+  <template finy id="note-box" label:str="Note">
+    <article class="card">
+      <h2>$label</h2>
+      <div f-slot>
+        <p>Fallback unnamed slot content.</p>
+      </div>
+    </article>
+  </template>
+
+  <template finy id="heading-level" size:num="3">
+    <h1 f-if="size === 1" f-slot></h1>
+    <h2 f-elif="size === 2" f-slot></h2>
+    <h3 f-elif="size === 3" f-slot></h3>
+    <h4 f-elif="size === 4" f-slot></h4>
+    <h5 f-else f-slot></h5>
+  </template>
+
+  <template finy id="project-card" title:str="Untitled" owner:str="Unknown" state:str="active" priority:num="1">
+    <article class="card">
+      <h2>$title</h2>
+      <p>Owner: <strong>$owner</strong></p>
+
+      <div class="status active" f-if="state === 'active'">Active project</div>
+      <div class="status pending" f-elif="state === 'pending'">Pending review</div>
+      <div class="status disabled" f-else>Disabled project</div>
+
+      <p f-if="priority >= 8">High priority: $"title" should stay near the top of the queue.</p>
+      <p f-elif="priority >= 4">Medium priority: $"title" is moving at a normal pace.</p>
+      <p f-else>Low priority: $"title" can wait behind active work.</p>
+
+      <h3>Metrics</h3>
+      <ul class="metrics">
+        <li class="metric" f-for="metric of [
+          { label: 'Open tasks', value: priority + 2 },
+          { label: 'Reviewers', value: state === 'pending' ? 3 : 1 },
+          { label: 'Risk score', value: priority * 10 }
+        ]">
+          <span>$"metric.label"</span>
+          <strong>$"metric.value"</strong>
+        </li>
+      </ul>
+
+      <h3>Tasks</h3>
+      <ul class="tasks">
+        <li class="task" f-for="task of [
+          { name: 'Draft scope', done: true },
+          { name: 'Review edge cases', done: state !== 'disabled' },
+          { name: 'Ship example page', done: priority < 8 }
+        ]">
+          <span>$"task.name"</span>
+          <strong f-if="task.done">done</strong>
+          <strong f-else>blocked</strong>
+        </li>
+      </ul>
+    </article>
+  </template>
+
+  <main>
+    <arg-demo></arg-demo>
+    <arg-demo name="Bo" age="28" active="false" badge="review"></arg-demo>
+
+    <template-branch-demo a="7"></template-branch-demo>
+    <template-branch-demo a="5"></template-branch-demo>
+    <template-branch-demo a="2"></template-branch-demo>
+
+    <loop-demo count="4"></loop-demo>
+    <component-loop-demo></component-loop-demo>
+    <dynamic-component-demo></dynamic-component-demo>
+
+    <slot-panel owner="Rin" limit="3">
+      <put f-slot="title">Named slot with put</put>
+      <put f-slot="body">
+        <p>Slot args expose $owner and $limit to caller content.</p>
+        <ul class="tasks">
+          <li class="task" f-for="i of finy.range(1, limit + 1)">
+            <span>Slotted task $i</span>
+            <strong>$owner</strong>
+          </li>
+        </ul>
+      </put>
+    </slot-panel>
+
+    <slot-panel owner="Fallback owner"></slot-panel>
+
+    <note-box label="Direct unnamed slot">
+      <p>Direct child content fills the unnamed slot without using put.</p>
+    </note-box>
+
+    <note-box label="Fallback unnamed slot"></note-box>
+
+    <article class="card">
+      <h2>Slot component inside f-for</h2>
+      <heading-level f-for="size of finy.range(1, 6)" size="size">Heading level $size</heading-level>
+    </article>
+
+    <project-card title="Renderer cleanup" owner="Tina" state="active" priority="9"></project-card>
+    <project-card title="Directive review" owner="Noah" state="pending" priority="5"></project-card>
+    <project-card title="Old prototype" owner="Mira" state="disabled" priority="2"></project-card>
+  </main>
+</body>
+</html>

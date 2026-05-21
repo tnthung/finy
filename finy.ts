@@ -10,21 +10,12 @@ const logger = new (class Logger {
   info (...args: any[]) { if (this.#enabled) console.info (...args); }
   warn (...args: any[]) { if (this.#enabled) console.warn (...args); }
   error(...args: any[]) { if (this.#enabled) console.error(...args); }
-
-  tap<T>(value: T): T {
-    this.debug('tap:', value);
-    return value;
-  }
-
-  tapJson<T>(value: T): T {
-    this.debug('tap:', JSON.stringify(value, null, 2));
-    return value;
-  }
 })();
 
 
 type BindingContext = Record<string, any>;
 type SlotContent = Map<string, Node[]>;
+type IfResolution = { element: Element | null, handled: boolean };
 
 function evalWithContext<T>(code: string, context: BindingContext): T {
   const func = new Function(...Object.keys(context), `"use strict"; return (${code});`);
@@ -214,7 +205,7 @@ abstract class Component {
   static arguments: Map<string, Argument> = new Map();
 
   private static renderChildren(parent: Node, args: BindingContext) {
-    for (const node of parent.childNodes)
+    for (const node of Array.from(parent.childNodes))
       this.renderNode(node, args);
   }
 
@@ -228,7 +219,7 @@ abstract class Component {
 
     if (!(node instanceof Element)) return;
 
-    const element = this.resolveIfChain(node, args);
+    const { element, handled } = this.resolveIfChain(node, args);
     if (!element) return;
 
     const forAttr = element.attributes.getNamedItem('f-for');
@@ -237,13 +228,21 @@ abstract class Component {
       return;
     }
 
+    if (this.renderDynamicComponent(element, args))
+      return;
+
+    if (handled && this.renderTemplateContent(element, args)) {
+      element.remove();
+      return;
+    }
+
     const component = components.get(element.tagName.toLowerCase());
     component ? component.apply(element, args) : this.renderChildren(element, args);
   }
 
-  private static resolveIfChain(element: Element, args: BindingContext): Element | null {
+  private static resolveIfChain(element: Element, args: BindingContext): IfResolution {
     const ifAttr = element.attributes.getNamedItem('f-if');
-    if (!ifAttr) return element;
+    if (!ifAttr) return { element, handled: false };
 
     element.removeAttribute('f-if');
 
@@ -285,7 +284,45 @@ abstract class Component {
       if (branch !== selected)
         branch.remove();
 
-    return selected;
+    return { element: selected, handled: true };
+  }
+
+  private static isTemplateElement(element: Element): element is HTMLTemplateElement {
+    return element.tagName.toLowerCase() === 'template';
+  }
+
+  private static renderDynamicComponent(element: Element, args: BindingContext): boolean {
+    const attr = element.attributes.getNamedItem('f-component');
+    if (!attr) return false;
+
+    const expression = attr.value.trim();
+    if (expression === '')
+      throw new Error('f-component attribute cannot be empty');
+
+    const name = String(evalWithContext<any>(expression, args)).trim();
+    const component = components.get(name);
+    if (!component)
+      throw new Error(`Component "${name}" is not registered`);
+
+    component.apply(element, args);
+    return true;
+  }
+
+  private static renderTemplateContent(element: Element, args: BindingContext, clone = false): boolean {
+    if (!this.isTemplateElement(element) || element.attributes.getNamedItem('f-slot'))
+      return false;
+
+    const parent = element.parentNode;
+    if (!parent) return true;
+
+    const children = Array.from(element.content.childNodes, child =>
+      clone ? child.cloneNode(true) : child);
+    for (const child of children)
+      parent.insertBefore(child, element);
+    for (const child of children)
+      this.renderNode(child, args);
+
+    return true;
   }
 
   private static expandFor(element: Element, expression: string, args: BindingContext) {
@@ -301,8 +338,12 @@ abstract class Component {
     const iterable = evalWithContext<Generator<Object>>(
       `(function*() { for (const ${expression}) yield { ${[...identifiers].join(', ')} }; })() `,
       args);
+    const isDynamicComponent = !!element.attributes.getNamedItem('f-component');
     for (const iterationContext of iterable) {
       const context = { ...args, ...iterationContext };
+      if (!isDynamicComponent && this.renderTemplateContent(element, context, true))
+        continue;
+
       const clone = element.cloneNode(true) as Element;
       parent.insertBefore(clone, element);
       this.renderNode(clone, context);
@@ -325,8 +366,11 @@ abstract class Component {
     const slots: SlotContent = new Map();
     let hasPut = false;
     let hasDefaultContent = false;
+    const childNodes = this.isTemplateElement(element)
+      ? ((element as HTMLTemplateElement).content?.childNodes ?? element.childNodes)
+      : element.childNodes;
 
-    for (const child of element.childNodes) {
+    for (const child of Array.from(childNodes)) {
       if (child.nodeType === Node.TEXT_NODE && (child.nodeValue ?? '').trim() === '')
         continue;
 
@@ -375,7 +419,7 @@ abstract class Component {
         node.removeAttribute(attr.name);
       }
 
-      if (node.tagName.toLowerCase() === 'template') {
+      if (this.isTemplateElement(node)) {
         const replacement = content ?? Array.from(
           ((node as HTMLTemplateElement).content?.childNodes ?? node.childNodes),
           child => child.cloneNode(true));
