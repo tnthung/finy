@@ -96,6 +96,27 @@ Use `f-if`, `f-elif`, and `f-else` on sibling elements:
 </template>
 ```
 
+Use `<template>` when the branch should not leave a wrapper element in the
+rendered DOM. Template control-flow renders the selected template's `.content`,
+not the `<template>` element itself:
+
+```html
+<template finy id="foo" a:num>
+  <template f-if="a > 5">
+    <p>$a is greater than 5</p>
+    <div>a * 2 = $"a*2"</div>
+  </template>
+  <template f-elif="a === 5">
+    <p>$a is equal to 5</p>
+    <div>a + 10 = $"a+10"</div>
+  </template>
+  <template f-else>
+    <p>$a is less than 5</p>
+    <div>a - 2 = $"a-2"</div>
+  </template>
+</template>
+```
+
 When an element has both `f-if` and `f-for`, the condition is checked first.
 
 ## Loops
@@ -127,6 +148,15 @@ Output:
 <p f-for="value of ['a', 'b']">$value</p>
 <p f-for="key in { a: 1, b: 2 }">$key</p>
 <p f-for="[key, value] of Object.entries(data)">$key: $value</p>
+```
+
+`f-for` can also repeat invisible template content:
+
+```html
+<template f-for="n of finy.range(1, 4)">
+  <p>Number $n</p>
+  <div>Double $"n * 2"</div>
+</template>
 ```
 
 ## Slots
