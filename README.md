@@ -37,6 +37,30 @@ Output:
 Component names must start with a lowercase letter and can contain lowercase
 letters, numbers, underscores, and hyphens.
 
+## Dynamic Components
+
+Use `f-component` on a `<template>` wrapper when the component name comes from
+the current binding context. The expression must resolve to a registered
+component name. The wrapper is removed, and the selected component renders in
+its place:
+
+```html
+<template finy id="foo">
+  <p>This is Foo</p>
+</template>
+
+<template finy id="bar">
+  <p>This is Bar</p>
+</template>
+
+<template finy id="dyn" name:str>
+  <template f-component="name"></template>
+</template>
+```
+
+Attributes on the `template[f-component]` are passed as component arguments.
+Children inside the template `.content` are passed as slot content.
+
 ## Arguments
 
 Template attributes declare component arguments:

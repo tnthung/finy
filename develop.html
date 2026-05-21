@@ -150,9 +150,36 @@
         <feature-row f-for="row of [
           { label: 'template f-if', active: true, count: 3 },
           { label: 'template f-for', active: true, count: 2 },
-          { label: 'dynamic component todo', active: false, count: 0 }
+          { label: 'dynamic component', active: true, count: 1 }
         ]" label="row.label" active="row.active" count="row.count"></feature-row>
       </ul>
+    </article>
+  </template>
+
+  <template finy id="dynamic-foo" label:str="Foo">
+    <section>
+      <p><strong>$label</strong>: This is Foo</p>
+      <template f-slot>
+        <p>Foo fallback slot.</p>
+      </template>
+    </section>
+  </template>
+
+  <template finy id="dynamic-bar" label:str="Bar">
+    <section>
+      <p><strong>$label</strong>: This is Bar</p>
+      <template f-slot>
+        <p>Bar fallback slot.</p>
+      </template>
+    </section>
+  </template>
+
+  <template finy id="dynamic-component-demo">
+    <article class="card">
+      <h2>Dynamic components</h2>
+      <template f-for="name of ['dynamic-foo', 'dynamic-bar']" f-component="name" label="'Selected ' + name">
+        <p>Slot content from the dynamic wrapper for $name.</p>
+      </template>
     </article>
   </template>
 
@@ -233,6 +260,7 @@
 
     <loop-demo count="4"></loop-demo>
     <component-loop-demo></component-loop-demo>
+    <dynamic-component-demo></dynamic-component-demo>
 
     <slot-panel owner="Rin" limit="3">
       <put f-slot="title">Named slot with put</put>

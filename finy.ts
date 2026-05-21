@@ -228,6 +228,9 @@ abstract class Component {
       return;
     }
 
+    if (this.renderDynamicComponent(element, args))
+      return;
+
     if (handled && this.renderTemplateContent(element, args)) {
       element.remove();
       return;
@@ -288,6 +291,23 @@ abstract class Component {
     return element.tagName.toLowerCase() === 'template';
   }
 
+  private static renderDynamicComponent(element: Element, args: BindingContext): boolean {
+    const attr = element.attributes.getNamedItem('f-component');
+    if (!attr) return false;
+
+    const expression = attr.value.trim();
+    if (expression === '')
+      throw new Error('f-component attribute cannot be empty');
+
+    const name = String(evalWithContext<any>(expression, args)).trim();
+    const component = components.get(name);
+    if (!component)
+      throw new Error(`Component "${name}" is not registered`);
+
+    component.apply(element, args);
+    return true;
+  }
+
   private static renderTemplateContent(element: Element, args: BindingContext, clone = false): boolean {
     if (!this.isTemplateElement(element) || element.attributes.getNamedItem('f-slot'))
       return false;
@@ -318,9 +338,10 @@ abstract class Component {
     const iterable = evalWithContext<Generator<Object>>(
       `(function*() { for (const ${expression}) yield { ${[...identifiers].join(', ')} }; })() `,
       args);
+    const isDynamicComponent = !!element.attributes.getNamedItem('f-component');
     for (const iterationContext of iterable) {
       const context = { ...args, ...iterationContext };
-      if (this.renderTemplateContent(element, context, true))
+      if (!isDynamicComponent && this.renderTemplateContent(element, context, true))
         continue;
 
       const clone = element.cloneNode(true) as Element;
@@ -345,8 +366,11 @@ abstract class Component {
     const slots: SlotContent = new Map();
     let hasPut = false;
     let hasDefaultContent = false;
+    const childNodes = this.isTemplateElement(element)
+      ? ((element as HTMLTemplateElement).content?.childNodes ?? element.childNodes)
+      : element.childNodes;
 
-    for (const child of element.childNodes) {
+    for (const child of Array.from(childNodes)) {
       if (child.nodeType === Node.TEXT_NODE && (child.nodeValue ?? '').trim() === '')
         continue;
 
