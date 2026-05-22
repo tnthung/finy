@@ -78,6 +78,9 @@
       <p f-if="badge === null">Optional badge: null default</p>
       <p f-else>Optional badge: $badge</p>
       <p>Expression binding: $"name.toUpperCase() + ' / ' + age"</p>
+      <p data-raw="name" $data-owner="name" $aria-label="'Native attribute for ' + name">
+        Native attrs: $name
+      </p>
     </article>
   </template>
 
@@ -219,9 +222,9 @@
       <div class="status pending" f-elif="state === 'pending'">Pending review</div>
       <div class="status disabled" f-else>Disabled project</div>
 
-      <p f-if="priority >= 8">High priority: $"title" should stay near the top of the queue.</p>
-      <p f-elif="priority >= 4">Medium priority: $"title" is moving at a normal pace.</p>
-      <p f-else>Low priority: $"title" can wait behind active work.</p>
+      <p f-if="priority >= 8">High priority: $title should stay near the top of the queue.</p>
+      <p f-elif="priority >= 4">Medium priority: $title is moving at a normal pace.</p>
+      <p f-else>Low priority: $title can wait behind active work.</p>
 
       <h3>Metrics</h3>
       <ul class="metrics">
