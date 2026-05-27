@@ -287,6 +287,13 @@
     <note-box label="Fallback unnamed slot"></note-box>
 
     <article class="card">
+      <h2>Top-level component host directives</h2>
+      <heading-level f-if="false" size="1">Hidden top-level heading</heading-level>
+      <heading-level f-if="true" size="2">Visible top-level f-if heading</heading-level>
+      <heading-level f-for="size of finy.range(5, 0)" size="size">Top-level loop heading $size</heading-level>
+    </article>
+
+    <article class="card">
       <h2>Slot component inside f-for</h2>
       <heading-level f-for="size of finy.range(1, 6)" size="size">Heading level $size</heading-level>
     </article>

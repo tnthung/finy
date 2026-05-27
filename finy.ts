@@ -726,7 +726,7 @@ function applyComponents() {
         try {
           const component = components.get(name);
           if (!component) continue;
-          applied = component.apply(element) || applied;
+          applied = component.render(element) || applied;
         } catch (error) {
           logError(`Error applying component "${name}":`, error, element);
         }
