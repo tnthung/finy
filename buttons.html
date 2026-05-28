@@ -39,8 +39,8 @@
   </button>
 </template>
 
-<template finy id="accent-button" label:str="Accent">
-  <button type="button">
+<template finy id="accent-button" label:str="Accent" click:fn?>
+  <button type="button" @click="click">
     <style>
       @scope {
         :scope {

@@ -291,6 +291,7 @@ class FinyModule {
 /// Core component system
 type BindingContext = Record<string, any>;
 type AttributeValues = Map<string, string>;
+type EventHandlers = Map<string, string>;
 type SlotContent = Map<string, FinyNode[]>;
 type RenderState = {
   slots: SlotContent;
@@ -299,6 +300,7 @@ type RenderState = {
 type NativeShell = {
   element: Element;
   dynamicAttrs: AttributeValues;
+  eventHandlers: EventHandlers;
 };
 type SlotArg = { name: string, value: string };
 
@@ -341,6 +343,7 @@ function isSpecialAttr(name: string): boolean {
 function makeNativeShell(element: Element, omitted: Set<string> = new Set()): NativeShell {
   const clone = element.cloneNode(false) as Element;
   const dynamicAttrs: AttributeValues = new Map();
+  const eventHandlers: EventHandlers = new Map();
 
   for (const attr of Array.from(clone.attributes)) {
     if (omitted.has(attr.name) || isSpecialAttr(attr.name)) {
@@ -351,16 +354,33 @@ function makeNativeShell(element: Element, omitted: Set<string> = new Set()): Na
     if (attr.name.startsWith('$')) {
       clone.removeAttribute(attr.name);
       dynamicAttrs.set(attr.name.slice(1), attr.value);
+      continue;
+    }
+
+    if (attr.name.startsWith('@')) {
+      clone.removeAttribute(attr.name);
+      eventHandlers.set(attr.name.slice(1), attr.value);
+      continue;
     }
   }
 
-  return { element: clone, dynamicAttrs };
+  return { element: clone, dynamicAttrs, eventHandlers };
 }
 
 function renderNativeShell(shell: NativeShell, args: BindingContext, children: Node[]): Element {
   const clone = shell.element.cloneNode(false) as Element;
+
   for (const [name, value] of shell.dynamicAttrs)
     clone.setAttribute(name, String(evalWithContext<any>(value, args)));
+
+  for (const [event, handler] of shell.eventHandlers) {
+    const eventHandler = evalWithContext(handler, args);
+    if (eventHandler == null) continue;
+    if (typeof eventHandler !== 'function')
+      throw new Error(`Event handler \`${handler}\` is not a function.`);
+    clone.addEventListener(event, eventHandler as any);
+  }
+
   appendNodes(clone, children);
   return clone;
 }
@@ -792,8 +812,7 @@ class SlotNode extends FinyNode {
       element.getAttribute('f-slot')?.trim() ?? '',
       args,
       isTemplateElement(element) ? null : makeNativeShell(element, new Set([...omitted, 'f-slot'])),
-      FinyNode.fromNodes(mod, childNodesOf(element), true),
-    );
+      FinyNode.fromNodes(mod, childNodesOf(element), true));
   }
 }
 
@@ -848,6 +867,8 @@ class Argument {
     'obj': (value: any) => {
       if (typeof value !== 'string')
         return value;
+      if (value.trim() === '')
+        return {};
 
       try {
         return JSON.parse(value);
@@ -855,6 +876,21 @@ class Argument {
         throw new Error(`Invalid object value \`${value}\`. Must be a valid JSON string.`);
       }
     },
+    'fn': (value: any) => {
+      if (typeof value === 'function')
+        return value;
+      if (value.trim() === '')
+        return () => {};
+
+      try {
+        const fn = evalWithContext<unknown>(value, {});
+        if (typeof fn !== 'function')
+          throw new Error(`Expression does not evaluate to a function.`);
+        return fn;
+      } catch {
+        throw new Error(`Invalid function expression \`${value}\`.`);
+      }
+    }
   };
 
   constructor(
