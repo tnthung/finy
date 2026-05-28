@@ -27,6 +27,10 @@ register('range', function*(start: number, end?: number): Generator<number> {
 
 
 /// Helpers
+function isNameValid(name: string): boolean {
+  return /^[a-z][a-z0-9_-]*$/.test(name);
+}
+
 function evalWithContext<T>(code: string, context: Record<string, any>): T {
   return new Function(
     ...Object.keys(context),
@@ -69,10 +73,213 @@ function getForBindings(expression: string): Set<string> {
   throw new Error('Unknown syntax for f-for expression.');
 }
 
+function isNestedComponent(mod: FinyModule, element: Element): boolean {
+  for (let parent = element.parentNode; parent; parent = parent.parentNode)
+    if (parent instanceof Element && !!mod.getComponent(parent.tagName.toLowerCase()))
+      return true;
+  return false;
+}
+
+
+/// Module system
+type ComponentScope = Map<string, typeof Component>;
+
+class FinyModule {
+  // url -> module
+  private static modules: Map<string, FinyModule> = new Map();
+
+  static initialize(): FinyModule { return new FinyModule('$root'); }
+
+  static getModule(path: string): FinyModule {
+    const mod = this.modules.get(path);
+    if (!mod) throw new Error(`Module "${path}" not found.`);
+    return mod;
+  }
+
+
+  private _path: string;
+  private _loadedDefinitions = false;
+  private _loadedImports = false;
+  private _imported: ComponentScope = new Map();
+  private _components: Map<string, typeof Component | null> = new Map();
+
+  get path() { return this._path; }
+
+  private constructor(_path: string) {
+    if ((this._path = _path.trim()) === '')
+      throw new Error('Module path cannot be empty.');
+    if (!FinyModule.modules.has(this._path))
+      this.loadComponents();
+  }
+
+  private async loadComponents() {
+    try {
+      const [importsTemplates, definitionTemplates] = await (async () => {
+        const templates = ((this._path !== '$root')
+          ? await fetch(this._path).then(async res => {
+              if (res.ok) return new DOMParser().parseFromString(await res.text(), 'text/html');
+              throw new Error(`Failed to fetch module from "${this._path}". HTTP status ${res.status}.`);
+            })
+          : document.body
+        ).querySelectorAll(':not(template) template[finy]');
+
+        const templateCollected: [
+          importsTemplates:    HTMLTemplateElement[],
+          definitionTemplates: HTMLTemplateElement[]
+        ] = [[], []];
+
+        for (const template of templates)
+          (template.getAttribute('src') != null
+            ? templateCollected[0]
+            : templateCollected[1])
+              .push(template as any);
+
+        return templateCollected;
+      })();
+
+      // always process imports first
+      const imports = [] as [string, string | null][];
+      for (const template of importsTemplates) {
+        const src = template.getAttribute('src')?.trim();
+        if (src) {
+          template.remove();
+
+          if (src === '')
+            throw new Error(`Template "src" attribute cannot be empty. ${template.outerHTML}`);
+
+          const as = template.getAttribute('as');
+          if (as != null && !isNameValid(as))
+            throw new Error(`Invalid "as" attribute "${as}". Must be kebab-case. ${template.outerHTML}`);
+
+          new FinyModule(src);
+          imports.push([src, as]);
+        }
+      }
+
+      // collect the component definition ids in the module
+      for (const template of definitionTemplates) {
+        template.remove();
+
+        if (!template.id)
+          throw new Error(`Template not imports must have an id. ${template.outerHTML}`);
+
+        if (!isNameValid(template.id))
+          throw new Error(`Invalid component id "${template.id}". Must be kebab-case. ${template.outerHTML}`);
+
+        if (this._components.has(template.id))
+          throw new Error(`Duplicate component id "${template.id}" in module "${this._path}". ${template.outerHTML}`);
+
+        // reserve the id
+        this._components.set(template.id, null);
+      }
+
+      // actually process the component definitions
+      for (const template of definitionTemplates) {
+        const component = Component.fromTemplate(this, template as HTMLTemplateElement);
+        this._components.set(template.id, component);
+
+        let message = `Registered component "${template.id}" with `;
+
+        if (component.arguments.size === 0) {
+          message += 'no arguments.';
+        } else {
+          message += 'arguments:';
+          for (const arg of component.arguments.values())
+            message += `\n  - ${arg.name}: ${arg.typeStr}${arg.optional ? '?' : ''} (default: ${arg.defaultValue})`;
+        }
+
+        logInfo(message);
+        logInfo(`Component "${template.id}" contents:`, component.contents);
+      }
+
+      this._loadedDefinitions = true;
+      FinyModule.modules.set(this._path, this);
+      await this.loadImports(imports);
+      this._loadedImports = true;
+
+      logInfo(
+        `Loading module "${this._path}" with ${definitionTemplates.length} component(s).`,
+        { path: this._path, components: this._components, imports: this._imported });
+
+    } catch (error) {
+      logError(`Error loading components for module "${this.path}":`, error);
+    }
+  }
+
+  getComponent(alias: string): typeof Component | undefined {
+    return this._components.get(alias) ?? this._imported.get(alias);
+  }
+
+  async loadImports(imports: [string, string | null][]) {
+    // wait for all modules to finish loading definitions
+    waiting: while (true) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      for (const [path] of imports) {
+        const mod = FinyModule.modules.get(path);
+        if (!mod)
+          throw new Error(`Module "${path}" not found.`);
+        if (!mod._loadedDefinitions)
+          continue waiting;
+      }
+
+      break;
+    }
+
+    // collect components from imported modules
+    for (const [modName, alias] of imports) {
+      const mod = FinyModule.modules.get(modName);
+      if (!mod)
+        throw new Error(`Module "${modName}" not found.`);
+
+      for (const [compName, comp] of mod._components) {
+        if (!comp)
+          throw new Error(`Component "${compName}" in module "${modName}" is not registered yet.`);
+
+        const compAlias = alias ? `${alias}:${compName}` : compName;
+        if (this._components.has(compName))
+          throw new Error(`Ambiguous import: Component "${compName}" already exists in module "${this.path}".`);
+
+        const existing = this._imported.get(compAlias);
+        if (existing != null && existing !== comp)
+          throw new Error(`Ambiguous import: Component "${compName}" imported from more than one module:\n- ${existing.module.path}\n- ${modName}`);
+
+        this._imported.set(compAlias, comp);
+      }
+    }
+  }
+
+  async applyComponents() {
+    while (!this._loadedImports)
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+    const time = Date.now();
+    let applied = false;
+
+    do {
+      applied = false;
+      for (const name of this._components.keys()) {
+        for (const element of Array.from(document.querySelectorAll(name))) {
+          if (!element.parentNode || isNestedComponent(this, element))
+            continue;
+
+          try {
+            const component = this.getComponent(name);
+            if (!component) continue;
+            applied = component.render(element) || applied;
+          } catch (error) {
+            logError(`Error applying component "${name}":`, error, element);
+          }
+        }
+      }
+    } while (applied);
+
+    logInfo(`Applied components in ${Date.now() - time}ms`);
+  }
+}
+
 
 /// Core component system
-const componentNames = new Set<string>(); // for quick lookup of component names when parsing templates
-const components = new Map<string, typeof Component>();
 type BindingContext = Record<string, any>;
 type AttributeValues = Map<string, string>;
 type SlotContent = Map<string, FinyNode[]>;
@@ -171,9 +378,10 @@ function resolveAttributeValue(value: string, context: BindingContext): any {
 abstract class Component {
   static arguments: Map<string, Argument> = new Map();
   static contents: FinyNode[] = [];
+  static module: FinyModule;
 
   static render(root: Element, args: BindingContext = {}) {
-    const nodes = renderNodes(FinyNode.fromNodes([root], true), args, { slots: new Map(), parentArgs: args });
+    const nodes = renderNodes(FinyNode.fromNodes(this.module, [root], true), args, { slots: new Map(), parentArgs: args });
     return this.replaceWithNodes(root, nodes);
   }
 
@@ -200,7 +408,7 @@ abstract class Component {
 
   static apply(element: Element, parentArgs: BindingContext = {}): boolean {
     const attributes = collectComponentAttributes(element);
-    const slots = collectSlotContent(element);
+    const slots = collectSlotContent(this.module, element);
     const nodes = this.expand(attributes, slots, parentArgs);
     return this.replaceWithNodes(element, nodes);
   }
@@ -217,37 +425,7 @@ abstract class Component {
     throw new Error('Unable to render on root-less element.');
   }
 
-  static registerAll() {
-    const templates = document.querySelectorAll('template[finy]');
-
-    for (const template of templates)
-      componentNames.add(template.id);
-
-    for (const template of templates) {
-      try {
-        const component = this.fromTemplate(template as HTMLTemplateElement);
-        components.set(template.id, component);
-
-        let message = `Registered component "${template.id}" with `;
-
-        if (component.arguments.size === 0) {
-          message += 'no arguments.';
-        } else {
-          message += 'arguments:';
-          for (const arg of component.arguments.values())
-            message += `\n  - ${arg.name}: ${arg.typeStr}${arg.optional ? '?' : ''} (default: ${arg.defaultValue})`;
-        }
-
-        logInfo(message);
-        logInfo(`Component "${template.id}" contents:`, component.contents);
-
-      } catch (error) {
-        logError(`Error registering component from template with id "${template.id}":`, error);
-      }
-    }
-  }
-
-  private static fromTemplate(template: HTMLTemplateElement): typeof Component {
+  static fromTemplate(mod: FinyModule, template: HTMLTemplateElement): typeof Component {
     if (!/^[a-z][a-z0-9_-]*$/.test(template.id))
       throw new Error(`Invalid component id "${template.id}". Must be kebab-case.`);
 
@@ -268,20 +446,20 @@ abstract class Component {
 
     return class extends Component {
       static arguments = args;
-      static contents = FinyNode.fromNode(template.content);
+      static contents = FinyNode.fromNode(mod, template.content);
+      static module = mod;
     };
   }
 }
 
-
 abstract class FinyNode {
   abstract render(args: BindingContext, state: RenderState): Node[];
 
-  static fromNode(root: Node, slotOutlets = true): FinyNode[] {
-    return this.fromNodes(childNodesOf(root), slotOutlets);
+  static fromNode(mod: FinyModule, root: Node, slotOutlets = true): FinyNode[] {
+    return this.fromNodes(mod, childNodesOf(root), slotOutlets);
   }
 
-  static fromNodes(nodes: Iterable<Node>, slotOutlets = true): FinyNode[] {
+  static fromNodes(mod: FinyModule, nodes: Iterable<Node>, slotOutlets = true): FinyNode[] {
     const contents: FinyNode[] = [];
     const skipped = new Set<Element>();
 
@@ -300,41 +478,41 @@ abstract class FinyNode {
         continue;
       }
 
-      contents.push(this.parseElement(node, slotOutlets, skipped));
+      contents.push(this.parseElement(mod, node, slotOutlets, skipped));
     }
 
     return contents;
   }
 
-  private static parseElement(element: Element, slotOutlets: boolean, skipped: Set<Element>): FinyNode {
+  private static parseElement(mod: FinyModule, element: Element, slotOutlets: boolean, skipped: Set<Element>): FinyNode {
     if (element.getAttribute('f-if') != null)
-      return this.fromIfChain(element, slotOutlets, skipped);
-    return this.fromSingleElement(element, slotOutlets);
+      return this.fromIfChain(mod, element, slotOutlets, skipped);
+    return this.fromSingleElement(mod, element, slotOutlets);
   }
 
-  static fromSingleElement(element: Element, slotOutlets: boolean, omitted: Set<string> = new Set()): FinyNode {
+  static fromSingleElement(mod: FinyModule, element: Element, slotOutlets: boolean, omitted: Set<string> = new Set()): FinyNode {
     if (!omitted.has('f-for') && element.getAttribute('f-for') != null)
       return new ForNode(
         element.getAttribute('f-for') ?? '',
-        this.fromSingleElement(element, slotOutlets, new Set([...omitted, 'f-for']))
+        this.fromSingleElement(mod, element, slotOutlets, new Set([...omitted, 'f-for']))
       );
 
     if (slotOutlets && !omitted.has('f-slot') && element.getAttribute('f-slot') != null)
-      return SlotNode.fromElement(element, omitted);
+      return SlotNode.fromElement(mod, element, omitted);
 
     if (!omitted.has('f-component') && element.getAttribute('f-component') != null)
-      return DynamicCallNode.fromElement(element, omitted);
+      return DynamicCallNode.fromElement(mod, element, omitted);
 
-    const call = CallNode.tryFromElement(element, omitted);
+    const call = CallNode.tryFromElement(mod, element, omitted);
     if (call) return call;
 
-    const wrap = WrapNode.tryFromElement(element, slotOutlets);
+    const wrap = WrapNode.tryFromElement(mod, element, slotOutlets);
     if (wrap) return wrap;
 
-    return NativeNode.fromElement(element, slotOutlets, omitted);
+    return NativeNode.fromElement(mod, element, slotOutlets, omitted);
   }
 
-  private static fromIfChain(element: Element, slotOutlets: boolean, skipped: Set<Element>): IfNode {
+  private static fromIfChain(mod: FinyModule, element: Element, slotOutlets: boolean, skipped: Set<Element>): IfNode {
     const branches: IfBranch[] = [];
 
     let branch: Element | null = element;
@@ -346,7 +524,7 @@ abstract class FinyNode {
 
       branches.push({
         condition: new ExprNode(condition),
-        body: this.fromSingleElement(branch, slotOutlets, new Set([attrName])),
+        body: this.fromSingleElement(mod, branch, slotOutlets, new Set([attrName])),
       });
 
       const next = branch.nextElementSibling as Element | null;
@@ -384,10 +562,10 @@ class NativeNode extends FinyNode {
     return [renderNativeShell(this.shell, args, children)];
   }
 
-  static fromElement(element: Element, slotOutlets: boolean, omitted: Set<string> = new Set()): NativeNode {
+  static fromElement(mod: FinyModule, element: Element, slotOutlets: boolean, omitted: Set<string> = new Set()): NativeNode {
     return new NativeNode(
       makeNativeShell(element, omitted),
-      FinyNode.fromNodes(element.childNodes, slotOutlets)
+      FinyNode.fromNodes(mod, element.childNodes, slotOutlets)
     );
   }
 }
@@ -479,9 +657,9 @@ class WrapNode extends FinyNode {
     return renderNodes(this.children, args, state);
   }
 
-  static tryFromElement(element: Element, slotOutlets: boolean): WrapNode | null {
+  static tryFromElement(mod: FinyModule, element: Element, slotOutlets: boolean): WrapNode | null {
     if (!isTemplateElement(element)) return null;
-    return new WrapNode(FinyNode.fromNode(element.content, slotOutlets));
+    return new WrapNode(FinyNode.fromNode(mod, element.content, slotOutlets));
   }
 }
 
@@ -490,21 +668,23 @@ class CallNode extends FinyNode {
     public componentName: string,
     public attributes: AttributeValues,
     public slots: SlotContent,
+    public module: FinyModule,
   ) { super(); }
 
   render(args: BindingContext): Node[] {
-    const component = components.get(this.componentName);
+    const component = this.module.getComponent(this.componentName);
     if (!component) throw new Error(`Component "${this.componentName}" is not registered.`);
     return component.expand(this.attributes, this.slots, args);
   }
 
-  static tryFromElement(element: Element, omitted: Set<string> = new Set()): CallNode | null {
+  static tryFromElement(mod: FinyModule, element: Element, omitted: Set<string> = new Set()): CallNode | null {
     const componentName = element.tagName.toLowerCase();
-    if (!componentNames.has(componentName)) return null;
+    if (!mod.getComponent(componentName)) return null;
     return new CallNode(
       componentName,
       collectComponentAttributes(element, omitted),
-      collectSlotContent(element));
+      collectSlotContent(mod, element),
+      mod);
   }
 }
 
@@ -536,11 +716,11 @@ class ForNode extends FinyNode {
     )].flatMap(captured => this.body.render({ ...args, ...captured }, state))
   }
 
-  static tryFromElement(element: Element): ForNode | null {
+  static tryFromElement(mod: FinyModule, element: Element): ForNode | null {
     const expr = element.getAttribute('f-for');
     if (expr == null) return null;
 
-    return new ForNode(expr, FinyNode.fromSingleElement(element, true, new Set(['f-for'])));
+    return new ForNode(expr, FinyNode.fromSingleElement(mod, element, true, new Set(['f-for'])));
   }
 }
 
@@ -549,21 +729,22 @@ class DynamicCallNode extends FinyNode {
     public expression: ExprNode,
     public attributes: AttributeValues,
     public slots: SlotContent,
+    public module: FinyModule,
   ) { super(); }
 
   render(args: BindingContext): Node[] {
     const componentName = String(this.expression.eval(args)).trim();
-    const component = components.get(componentName);
+    const component = this.module.getComponent(componentName);
     if (!component) throw new Error(`Component "${componentName}" is not registered.`);
     return component.expand(this.attributes, this.slots, args);
   }
 
-  static fromElement(element: Element, omitted: Set<string> = new Set()): DynamicCallNode {
+  static fromElement(mod: FinyModule, element: Element, omitted: Set<string> = new Set()): DynamicCallNode {
     return new DynamicCallNode(
       new ExprNode(element.getAttribute('f-component') ?? ''),
       collectComponentAttributes(element, new Set([...omitted, 'f-component'])),
-      collectSlotContent(element)
-    );
+      collectSlotContent(mod, element),
+      mod);
   }
 }
 
@@ -598,7 +779,7 @@ class SlotNode extends FinyNode {
     return [renderNativeShell(this.shell, args, children)];
   }
 
-  static fromElement(element: Element, omitted: Set<string> = new Set()): SlotNode {
+  static fromElement(mod: FinyModule, element: Element, omitted: Set<string> = new Set()): SlotNode {
     const args: SlotArg[] = [];
     for (const attr of Array.from(element.attributes))
       if (attr.name.startsWith('f-arg:'))
@@ -608,7 +789,7 @@ class SlotNode extends FinyNode {
       element.getAttribute('f-slot')?.trim() ?? '',
       args,
       isTemplateElement(element) ? null : makeNativeShell(element, new Set([...omitted, 'f-slot'])),
-      FinyNode.fromNodes(childNodesOf(element), true),
+      FinyNode.fromNodes(mod, childNodesOf(element), true),
     );
   }
 }
@@ -618,7 +799,7 @@ function addSlotContent(slots: SlotContent, name: string, nodes: FinyNode[]) {
   content ? content.push(...nodes) : slots.set(name, nodes);
 }
 
-function collectSlotContent(element: Element): SlotContent {
+function collectSlotContent(mod: FinyModule, element: Element): SlotContent {
   const slots: SlotContent = new Map();
   const putNodes: Element[] = [];
   const defaultNodes: Node[] = [];
@@ -643,11 +824,10 @@ function collectSlotContent(element: Element): SlotContent {
     addSlotContent(
       slots,
       put.getAttribute('f-slot')?.trim() ?? '',
-      FinyNode.fromNodes(put.childNodes, false)
-    );
+      FinyNode.fromNodes(mod, put.childNodes, false));
 
   if (defaultNodes.length > 0)
-    addSlotContent(slots, '', FinyNode.fromNodes(defaultNodes, false));
+    addSlotContent(slots, '', FinyNode.fromNodes(mod, defaultNodes, false));
 
   return slots;
 }
@@ -705,40 +885,7 @@ class Argument {
   }
 }
 
-function isNestedComponent(element: Element): boolean {
-  for (let parent = element.parentNode; parent; parent = parent.parentNode)
-    if (parent instanceof Element && componentNames.has(parent.tagName.toLowerCase()))
-      return true;
-  return false;
-}
-
-function applyComponents() {
-  const time = Date.now();
-  let applied = false;
-
-  do {
-    applied = false;
-    for (const name of componentNames) {
-      for (const element of Array.from(document.querySelectorAll(name))) {
-        if (!element.parentNode || isNestedComponent(element))
-          continue;
-
-        try {
-          const component = components.get(name);
-          if (!component) continue;
-          applied = component.render(element) || applied;
-        } catch (error) {
-          logError(`Error applying component "${name}":`, error, element);
-        }
-      }
-    }
-  } while (applied);
-
-  logInfo(`Applied components in ${Date.now() - time}ms`);
-}
-
 
 window.onload = function() {
-  Component.registerAll();
-  applyComponents();
+  FinyModule.initialize().applyComponents();
 }
