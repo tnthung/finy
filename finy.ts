@@ -27,6 +27,10 @@ register('range', function*(start: number, end?: number): Generator<number> {
 
 
 /// Helpers
+async function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function isNameValid(name: string): boolean {
   return /^[a-z][a-z0-9_-]*$/.test(name);
 }
@@ -213,7 +217,7 @@ class FinyModule {
   async loadImports(imports: [string, string | null][]) {
     // wait for all modules to finish loading definitions
     waiting: while (true) {
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await sleep(50);
 
       for (const [path] of imports) {
         const mod = FinyModule.modules.get(path);
@@ -251,7 +255,7 @@ class FinyModule {
 
   async applyComponents() {
     while (!this._loadedImports)
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await sleep(50);
 
     const time = Date.now();
     let applied = false;
