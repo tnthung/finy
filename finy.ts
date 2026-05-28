@@ -85,7 +85,7 @@ function getForBindings(expression: string): Set<string> {
 
 function isNestedComponent(mod: FinyModule, element: Element): boolean {
   for (let parent = element.parentNode; parent; parent = parent.parentNode)
-    if (parent instanceof Element && !!mod.getComponent(parent.tagName.toLowerCase()))
+    if (parent instanceof Element && mod.existsComponent(parent.tagName.toLowerCase()))
       return true;
   return false;
 }
@@ -108,8 +108,10 @@ class FinyModule {
 
 
   private _path: string;
+  private _loadedSymbols = false;
   private _loadedDefinitions = false;
   private _loadedImports = false;
+  private _imports: [string, string | null][] = [];
   private _imported: ComponentScope = new Map();
   private _components: Map<string, typeof Component | null> = new Map();
 
@@ -123,6 +125,8 @@ class FinyModule {
   }
 
   private async loadComponents() {
+    FinyModule.modules.set(this._path, this);
+
     try {
       const [importsTemplates, definitionTemplates] = await (async () => {
         const templates = ((this._path !== '$root')
@@ -148,7 +152,6 @@ class FinyModule {
       })();
 
       // always process imports first
-      const imports = [] as [string, string | null][];
       for (const template of importsTemplates) {
         const src = template.getAttribute('src')?.trim();
         if (src) {
@@ -162,7 +165,7 @@ class FinyModule {
             throw new Error(`Invalid "as" attribute "${as}". Must be kebab-case. ${template.outerHTML}`);
 
           new FinyModule(src);
-          imports.push([src, as]);
+          this._imports.push([src, as]);
         }
       }
 
@@ -183,6 +186,10 @@ class FinyModule {
         this._components.set(template.id, null);
       }
 
+      this._loadedSymbols = true;
+      while (this._imports.some(([path]) => !FinyModule.modules.get(path)?._loadedSymbols))
+        await sleep(50);
+
       // actually process the component definitions
       for (const template of definitionTemplates) {
         const component = Component.fromTemplate(this, template as HTMLTemplateElement);
@@ -199,12 +206,10 @@ class FinyModule {
         }
 
         logInfo(message);
-        logInfo(`Component "${template.id}" contents:`, component.contents);
       }
 
       this._loadedDefinitions = true;
-      FinyModule.modules.set(this._path, this);
-      await this.loadImports(imports);
+      await this.loadImports();
       this._loadedImports = true;
 
       logInfo(
@@ -216,28 +221,13 @@ class FinyModule {
     }
   }
 
-  getComponent(alias: string): typeof Component | undefined {
-    return this._components.get(alias) ?? this._imported.get(alias);
-  }
-
-  async loadImports(imports: [string, string | null][]) {
+  private async loadImports() {
     // wait for all modules to finish loading definitions
-    waiting: while (true) {
+    while (this._imports.some(([path]) => !FinyModule.modules.get(path)?._loadedDefinitions))
       await sleep(50);
 
-      for (const [path] of imports) {
-        const mod = FinyModule.modules.get(path);
-        if (!mod)
-          throw new Error(`Module "${path}" not found.`);
-        if (!mod._loadedDefinitions)
-          continue waiting;
-      }
-
-      break;
-    }
-
     // collect components from imported modules
-    for (const [modName, alias] of imports) {
+    for (const [modName, alias] of this._imports) {
       const mod = FinyModule.modules.get(modName);
       if (!mod)
         throw new Error(`Module "${modName}" not found.`);
@@ -259,6 +249,15 @@ class FinyModule {
     }
   }
 
+  getComponent(alias: string): typeof Component | undefined {
+    return this._components.get(alias) ?? this._imported.get(alias);
+  }
+
+  existsComponent(alias: string): boolean {
+    return this._components.has(alias) || (this._loadedImports ? this._imported.has(alias)
+      : this._imports.some(([path]) => FinyModule.modules.get(path)?._components.has(alias)));
+  }
+
   async applyComponents() {
     while (!this._loadedImports)
       await sleep(50);
@@ -268,7 +267,7 @@ class FinyModule {
 
     do {
       applied = false;
-      for (const name of this._components.keys()) {
+      for (const name of [...this._components.keys(), ...this._imported.keys()]) {
         for (const element of Array.from(document.getElementsByTagName(name))) {
           if (!element.parentNode || isNestedComponent(this, element))
             continue;
@@ -683,7 +682,7 @@ class CallNode extends FinyNode {
 
   static tryFromElement(mod: FinyModule, element: Element, omitted: Set<string> = new Set()): CallNode | null {
     const componentName = element.tagName.toLowerCase();
-    if (!mod.getComponent(componentName)) return null;
+    if (!mod.existsComponent(componentName)) return null;
     return new CallNode(
       componentName,
       collectComponentAttributes(element, omitted),
