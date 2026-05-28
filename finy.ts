@@ -5,6 +5,12 @@ function register(name: string, thing: any) {
   (window as any).finy[name] = thing;
 }
 
+window.onload = function() {
+  FinyModule
+    .initialize()
+    .applyComponents();
+}
+
 
 /// Logging utilities
 let logEnabled = true;
@@ -263,14 +269,14 @@ class FinyModule {
     do {
       applied = false;
       for (const name of this._components.keys()) {
-        for (const element of Array.from(document.querySelectorAll(name))) {
+        for (const element of Array.from(document.getElementsByTagName(name))) {
           if (!element.parentNode || isNestedComponent(this, element))
             continue;
 
           try {
             const component = this.getComponent(name);
             if (!component) continue;
-            applied = component.render(element) || applied;
+            applied ||= component.render(element);
           } catch (error) {
             logError(`Error applying component "${name}":`, error, element);
           }
@@ -385,15 +391,17 @@ abstract class Component {
   static module: FinyModule;
 
   static render(root: Element, args: BindingContext = {}) {
-    const nodes = renderNodes(FinyNode.fromNodes(this.module, [root], true), args, { slots: new Map(), parentArgs: args });
-    return this.replaceWithNodes(root, nodes);
+    return this.replaceWithNodes(root, renderNodes(
+      FinyNode.fromNodes(this.module, [root], true),
+      args,
+      { slots: new Map(), parentArgs: args }));
   }
 
   static expand(attributes: AttributeValues, slots: SlotContent, parentArgs: BindingContext): Node[] {
     const args: BindingContext = {};
     for (const [name, arg] of this.arguments) {
       const attr = attributes.get(name);
-      if (attr !== undefined) {
+      if (attr != null) {
         args[name] = arg.construct(resolveAttributeValue(attr, parentArgs));
         continue;
       }
@@ -521,7 +529,7 @@ abstract class FinyNode {
 
     let branch: Element | null = element;
     let attrName = 'f-if';
-    while (branch) {
+    exploreBranch: while (branch) {
       const condition = attrName === 'f-else'
         ? 'true'
         : branch.getAttribute(attrName) ?? '';
@@ -534,19 +542,13 @@ abstract class FinyNode {
       const next = branch.nextElementSibling as Element | null;
       if (!next) break;
 
-      if (next.getAttribute('f-elif') != null) {
-        skipped.add(next);
-        branch = next;
-        attrName = 'f-elif';
-        continue;
-      }
-
-      if (next.getAttribute('f-else') != null) {
-        skipped.add(next);
-        branch = next;
-        attrName = 'f-else';
-        continue;
-      }
+      for (const attr of ['f-elif', 'f-else'])
+        if (next.getAttribute(attr) != null) {
+          skipped.add(next);
+          branch = next;
+          attrName = attr;
+          continue exploreBranch;
+        }
 
       break;
     }
@@ -569,8 +571,7 @@ class NativeNode extends FinyNode {
   static fromElement(mod: FinyModule, element: Element, slotOutlets: boolean, omitted: Set<string> = new Set()): NativeNode {
     return new NativeNode(
       makeNativeShell(element, omitted),
-      FinyNode.fromNodes(mod, element.childNodes, slotOutlets)
-    );
+      FinyNode.fromNodes(mod, element.childNodes, slotOutlets));
   }
 }
 
@@ -676,9 +677,8 @@ class CallNode extends FinyNode {
   ) { super(); }
 
   render(args: BindingContext): Node[] {
-    const component = this.module.getComponent(this.componentName);
-    if (!component) throw new Error(`Component "${this.componentName}" is not registered.`);
-    return component.expand(this.attributes, this.slots, args);
+    return this.module.getComponent(this.componentName)!
+      .expand(this.attributes, this.slots, args);
   }
 
   static tryFromElement(mod: FinyModule, element: Element, omitted: Set<string> = new Set()): CallNode | null {
@@ -887,9 +887,4 @@ class Argument {
 
     return new Argument(name, type || 'str', constructor, optional || defaultValue !== undefined, defaultValue);
   }
-}
-
-
-window.onload = function() {
-  FinyModule.initialize().applyComponents();
 }
