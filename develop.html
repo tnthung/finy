@@ -69,6 +69,8 @@
   </style>
 </head>
 <body>
+  <template finy src="buttons.html"></template>
+
   <template finy id="arg-demo" name:str="Ada" age:num="31" active:bool="true" badge:str?="null">
     <article class="card">
       <h2>Arguments and text bindings</h2>
@@ -186,6 +188,17 @@
     </article>
   </template>
 
+  <template finy id="imported-component-demo">
+    <article class="card">
+      <h2>Nested Component Button row</h2>
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <primary-button label="Save"></primary-button>
+        <outline-button label="Cancel"></outline-button>
+        <accent-button label="Upgrade"></accent-button>
+      </div>
+    </article>
+  </template>
+
   <template finy id="slot-panel" owner:str="Unknown" limit:num="2">
     <article class="card">
       <h2 f-slot="title">Fallback title for $owner</h2>
@@ -264,6 +277,16 @@
     <loop-demo count="4"></loop-demo>
     <component-loop-demo></component-loop-demo>
     <dynamic-component-demo></dynamic-component-demo>
+    <imported-component-demo></imported-component-demo>
+
+    <article class="card">
+      <h2>Inlined Button row</h2>
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <primary-button label="Save"></primary-button>
+        <outline-button label="Cancel"></outline-button>
+        <accent-button label="Upgrade"></accent-button>
+      </div>
+    </article>
 
     <slot-panel owner="Rin" limit="3">
       <put f-slot="title">Named slot with put</put>
